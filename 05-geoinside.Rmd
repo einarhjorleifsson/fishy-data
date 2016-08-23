@@ -1,0 +1,117 @@
+# Attributes
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE)
+```
+
+```{r}
+library(sp)
+library(gisland)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggpolypath)
+```
+
+## Finding point attributes
+
+When working with spatial data one is often interested in finding the attributes of a particular points/coordinates. Like if a point falls within a certain area, region, strata, ... etc. If the data are of the sp-class family one can generally solve this using the `sp::over`-function. This function has been wrapped inside the `gisland::geo_inside`-function so that it falls under the tidyverse pipe flow.
+
+Generally we would have:
+
+* A vector of longitude and latitude points
+* A spatialPolygonDataFrame with some attributes
+
+What we would like as the output is:
+
+* A vector of same length as the points
+
+### Examples
+
+#### ICES area
+
+```{r}
+ices.area <- rgdal::readOGR(dsn = "/home/einarhj/stasi/gis/ices/shapes_modified",
+               layer = "ICES_areas_simplifed_tolerance005")
+map <- ices.area[ices.area$ICES_area %in% c("Va1", "Va2"),]
+class(map)
+```
+
+The attributes are:
+```{r}
+map@data
+```
+
+Lets generate some fictionary spatial positions:
+```{r}
+set.seed(16)
+station <- 
+  data_frame(long = runif(1000, -28, -9),
+             lat  = runif(1000, 61.5, 68.5))
+```
+
+If we were interested in obtaining the "ICES_area" to which the points belong to one could do:
+```{r}
+station <-
+  station %>% 
+  mutate(strata = geo_inside(long, lat, map, variable = "ICES_area"))
+glimpse(station)
+station %>% 
+  group_by(strata) %>% 
+  summarise(n = n())
+```
+
+So here we have `r length(station$strata[station$strata %in% "Va1"])` points that fall within strata Va1, `r length(station$strata[station$strata %in% "Va2"])` points that fall within strata Va2 and `r sum(is.na(station$strata))` points that are outside those two stratas. A visual representation can be obtained as:
+```{r}
+ggplot(map, aes(x = long, y = lat)) +
+  theme_bw() +
+  geom_polypath(aes(group = group), fill = "grey90") +
+  geom_path(aes(group = group), col = "yellow") +
+  geom_point(data = station, aes(col = strata), size = 1) +
+  coord_quickmap()
+```
+
+Take note that points that are on land (within the Icelandic shoreline) are not included within strata Va2. This is because the shorelines are defined as "holes" within the map-object.
+
+If one were only interested in subsetting the data set, keeping only the points that fall within an area one could simply not specify the variable name to return:
+
+```{r}
+set.seed(16)
+station <- 
+  data_frame(long = runif(1000, -28, -9),
+             lat  = runif(1000, 61.5, 68.5)) %>% 
+  filter(geo_inside(long, lat, map))
+nrow(station)
+```
+
+#### Points on land
+
+This is kind of a reverse problem from the one above. In order to exclude data points on land one could do:
+
+```{r}
+set.seed(16) #16 works - get one point on Vestmanneyjar
+station <- 
+  data_frame(long = runif(1000, -28, -9),
+             lat  = runif(1000, 61.5, 68.5)) %>% 
+  mutate(on_land = geo_inside(long, lat, biceland))
+
+station %>% 
+  filter(on_land) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_polygon(data = biceland, aes(long, lat, group = group), fill = "grey90") +
+  geom_point(aes(long, lat), col = "red") +
+  coord_quickmap()
+```
+
+One could think that one of the point on the map (the southernmost one) has been wrongly classified on land. That is however not the case because it falls within one of the small islands of Vestmannaeyjar.
+
+If one were to exclude the points on land one would use `filter(!on_land)` in the pipe above.
+
+
+#### Points in vicinity of other points
+
+Like points close to harbour.
+
+....

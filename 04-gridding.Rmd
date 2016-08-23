@@ -1,0 +1,312 @@
+# On gridding data
+
+__Comment__: Need a better title (e.g. summarizing 3d data)
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE)
+```
+
+```{r}
+library(gisland)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(viridis)
+```
+
+__A hidden gem?__
+
+`ggplot2::geom_tile`
+
+__Leftover statement__: A very modern example of the (ab)use of such mapping of continuous values is the classification found in the ICES stock summary.)
+
+## On gridding data
+
+```{r, echo = FALSE, eval = FALSE}
+# __Generation of example data__:
+attach("/home/einarhj/prj/2016_trawlfootprint/data/2013_logbooks_and_vms.rda")
+base <- 
+  stofn %>% 
+  select(tid = visir, vid, gid, towtime = togtimi, t1, t2) %>% 
+  filter(tid < 0)  # only electronic logbooks
+catch <- 
+  afli %>% 
+  rename(tid = visir, species = tegund, catch = afli) %>% 
+  filter(tid < 0)
+tows <-
+  base %>% 
+  filter(!is.na(t2),
+         !is.na(towtime),
+         gid %in% 6)
+catch2 <- 
+  tows %>% 
+  select(tid) %>% 
+  left_join(catch) %>% 
+  group_by(tid) %>% 
+  summarise(catch = sum(catch, na.rm = TRUE)) %>% 
+  ungroup()
+tows <-
+  tows %>% 
+  left_join(catch2)
+
+vms2 <- 
+  vms %>% 
+  mutate(tid = lookup_interval_ids(posdate, vid, tows, cn = c("t1", "t2", "vid", "tid"))) %>% 
+  filter(!is.na(tid)) %>% 
+  select(tid, vid, lon, lat, speed, heading) %>% 
+  group_by(tid) %>% 
+  mutate(n_pings = n()) %>% 
+  ungroup() %>% 
+  inner_join(tows %>% select(tid, towtime, catch)) %>% 
+  mutate(catch = catch/n_pings,
+         effort = towtime/n_pings) %>% 
+  mutate(sq = tile_encode(lon, lat, dx = 0.010, dy = 0.005)) %>% 
+  group_by(sq) %>% 
+  summarise(n = n(),
+            effort = sum(effort),
+            catch = sum(catch),
+            cpue = catch/effort) %>% 
+  ungroup() %>% 
+  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE)
+
+vms2 %>% 
+  filter(between(lon, -25, -24),
+         between(lat,  66.5,  67),
+         n > 5) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_raster(aes(lon, lat, fill = n)) +
+  coord_quickmap() +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  labs(x = NULL, y = NULL) +
+  theme(legend.position = c(0.8, 0.2))
+vms2 %>% 
+  filter(between(lon, -25, -24),
+         between(lat,  66.5,  67),
+         n > 5) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_raster(aes(lon, lat, fill = catch)) +
+  coord_quickmap() +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  labs(x = NULL, y = NULL) +
+  theme(legend.position = c(0.8, 0.2))
+vms2 %>% 
+  filter(between(lon, -25, -24),
+         between(lat,  66.5,  67),
+         n > 5) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_raster(aes(lon, lat, fill = cpue)) +
+  coord_quickmap() +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  labs(x = NULL, y = NULL) +
+  theme(legend.position = c(0.8, 0.2))
+
+```
+
+Statistics of two dimentional continuous data (x and y, longitudes and latitudes, ...) are often summarise by mapping the raw data on to a discontinuous grid. The grid is normally a rectangle (tiles) where all the tiles are the same size. A classical case where high resolution data have been reported/summarised to a tiles are the long established catch and effort statistics of the UK fleet, reported by ICES statistical rectangles (the resolution being 1 degree latitude and $1/2$ degree longitude).
+
+```{r, echo = FALSE}
+attach("/home/einarhj/stasi/ukSeaCharts.RData")
+ukSeaCharts %>% 
+  filter(species == 1,
+         year == 1932) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_tile(aes(lon, lat, fill = catch)) + 
+  facet_wrap(~ month) +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  coord_quickmap() +
+  scale_x_continuous(NULL, NULL) +
+  scale_y_continuous(NULL, NULL) +
+  geom_polygon(data = iceland, aes(long, lat, group = group), fill = "grey") +
+  labs(title = "Catch distribution of cod by UK fleet by months in 1932")
+```
+
+In modern times the "raw" logbook data are normally recorded (at least should) at a much higher resolution. In the Icelandic logbook database the start and end position of each trawl haul has been recorded since 19xx. A generic approach to "round" a continous x- and y-values to a central position is provided by the `gisland::tile_encode` function. Let's take an arbriary example.
+
+```{r}
+df.raw <- 
+  data_frame(lon = rnorm(2000, -22, 2),
+             lat = rnorm(2000, 66, 1))
+ggplot(df.raw, aes(lon, lat)) +
+  geom_point(alpha = 0.2) +
+  coord_quickmap()
+```
+
+If we were to count the number of events (points) within a rectangle of same resolution as the ICES rectangle we can do:
+```{r}
+df <-
+  df.raw %>% 
+  mutate(sq = tile_encode(x = lon, y = lat, dx = 1, dy = 0.5))
+df
+```
+In the above we have simply "rounded" each record of lon's and the lat's to the defined tile resolution encoded in the character variable `sq`, where the midpoint x- and the y-values are separated by a `:`. To e.g. count the number of records in each tile and return the numerical midpoint values for each tile we simply do:
+```{r}
+df <- 
+  df %>% 
+  group_by(sq) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE, remove = FALSE)
+df
+```
+The `remove = FALSE` is here simply used for illustrative purpose.
+
+Now to visualize the tile statistics we use the `geom_raster` function:
+```{r}
+df %>% 
+  ggplot(aes(lon, lat)) +
+  theme_bw() +
+  geom_raster(aes(fill = n)) +
+  geom_point(data = df.raw, aes(lon, lat), colour = "red", size = 0.25) +
+  geom_text(aes(label = n), colour = "yellow", angle = 45) +
+  coord_quickmap()
+```
+
+
+An attempt to provide generic approach is wrapped in the `gisland::tile_encode` function:
+
+```{r, message = FALSE}
+attach("/home/einarhj/prj/2016_trawlfootprint/data/2013_logbooks_and_vms.rda")
+base <- stofn
+tows <-
+  base %>% 
+  select(t1, t2, vid, gid, visir) %>% 
+  filter(!is.na(t2),
+         gid %in% 6)
+vms2 <- 
+  vms %>% 
+  mutate(visir = lookup_interval_ids(posdate, vid, tows, cn = c("t1", "t2", "vid", "visir"))) %>% 
+  filter(!is.na(visir)) %>% 
+  mutate(sq = tile_encode(lon, lat, dx = 0.010, dy = 0.005)) %>% 
+  group_by(sq) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE)
+
+vms2 %>% 
+  filter(between(lon, -25, -24),
+         between(lat,  66.5,  67),
+         n > 5) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_raster(aes(lon, lat, fill = n)) +
+  coord_quickmap() +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  labs(x = NULL, y = NULL) +
+  theme(legend.position = c(0.8, 0.2))
+
+# zoom out a bit
+vms2 %>% 
+  filter(between(lon, -27, -23),
+         between(lat,  65.75,  67.3),
+         n > 5) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_polygon(data = iceland, aes(long, lat, group = group), fill = "grey") +
+  geom_raster(aes(lon, lat, fill = n)) +
+  coord_quickmap(xlim = c(-27, -23), ylim = c(65.75,  67.3)) +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  labs(x = NULL, y = NULL) +
+  theme(legend.position = c(0.1, 0.8))
+
+# and then some
+vms2 %>% 
+  filter(between(lon, -27, -9),
+         between(lat,  62.8,  67.75)) %>% 
+  mutate(n = ifelse(n > 50, 50, n)) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_polygon(data = iceland, aes(long, lat, group = group), fill = "grey") +
+  geom_raster(aes(lon, lat, fill = n), interpolate = TRUE) +
+  coord_quickmap() +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  labs(x = NULL, y = NULL) +
+  theme(legend.position = c(0.5, 0.4))
+```
+
+
+## ICES rectangles
+
+A historical case, that has been with us in fishiers statistics (far to long) is to map catches from a particular fishing operation on statistical squares. Be they ices statistical rectangles (with a resolution 1° longitude and 0.5° latitude) or any other native tile format. Just as a case in point that this has been with us for a long time, here are some some data of the English fleet catch by ICES rectangle from the 19xx:
+
+```{r}
+
+
+```
+
+In the above case, as in any other rectangle/tile code system one needs to decode a one dimentional vector (normally a character) into some (dis-)continous values that are suitable for plotting. In the above case this is done with the `decode_tile`-function.
+
+## c-square
+
+Another example is the format that ICES report to OSPAR.
+
+... something more on c-square ...
+
+
+```{r}
+
+
+```
+
+... the problem is the same, to decode one dimentional character vector into x- and y-dimensions so it can be plotted. In the above case, we use the same `decode_tile`-function but specify instead of using the default (system = "ICES") we use (system = "csquare").
+
+
+
+
+```{r}
+data(tacsat, package = "vmstools")
+tacsat %>% 
+  gisland::tidy_tacsat() %>% 
+  select(SI_LONG, SI_LATI) %>% 
+  mutate(sq = tile_encode(SI_LONG, SI_LATI, dx = 0.50, dy = 0.25)) %>% 
+  group_by(sq) %>% 
+  slice(1)
+```
+
+The function returns the midpoints of a tile, whose resolution is specifed by _dx_ and _dy_ as a character vector where the midpoints are parsed, separated by _:_. Based on this one can start to create various summary statistics on each tile, e.g.
+
+```{r}
+vms <- 
+  tacsat %>% 
+  tidy_tacsat() %>% 
+  select(year, SI_LATI, SI_LONG, SI_SP, SI_HE) %>% 
+  mutate(sq = tile_encode(SI_LONG, SI_LATI, dx = 0.50, dy = 0.25)) %>% 
+  group_by(year, sq) %>% 
+  summarise(n = n(),
+            # not necessarily sensible statistics
+            maxSP = max(SI_SP, na.rm = TRUE),
+            minSP = min(SI_SP, na.rm = TRUE),
+            meanSP = mean(SI_SP, na.rm = TRUE),
+            medianHE = median(SI_HE, na.rm = TRUE))
+glimpse(vms)
+```
+
+To get back the numerical value of the tile midpoints one can use the `tidyr::separate` function.
+```{r}
+vms <- 
+  vms %>% 
+  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE)
+glimpse(vms)
+```
+
+A visual map can then be obtained via the `ggplot2::geom_tile` function:
+
+```{r}
+library(mmap)
+m <- ecoregion[ecoregion$Ecoregion %in% "Greater North Sea",]
+vms %>% 
+  filter(between(lon, -4, 10),
+         between(lat, 25, 58)) %>% 
+  ggplot() +
+  geom_polygon(data = m, aes(long, lat, group = group), fill = "white") +
+  geom_tile(aes(lon, lat, fill = n)) +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  facet_wrap(~ year) +
+  coord_quickmap()
+rm(vms)
+```
+

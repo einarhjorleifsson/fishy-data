@@ -1,0 +1,204 @@
+# Appendicies
+
+## Preamble
+
+Here I describe how the sqlite database was populated.
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE)
+```
+
+```{r, message = FALSE}
+library(dplyr)
+library(ggplot2)
+library(ggpolypath)
+```
+
+## Ecoregion
+
+```{r, eval = FALSE}
+mmap <- src_sqlite("/home/einarhj/r/Pakkar/mmap/inst/extdata/mmap.sqlite3")
+ecoregion <- readOGR(dsn = "/home/einarhj/stasi/gis/ices/data-raw/ICES_ecoregions/",
+               layer = "ICES_ecoregions_20150113_no_land")
+
+ecoregiondat <- 
+  ecoregion@data %>% 
+  mutate(object_ = row_number()) %>% 
+  tbl_df()
+ecoregion <- spbabel::sptable(ecoregion)
+copy_to(mmap, ecoregion, temporary = FALSE, indexes = list(c("object_", "branch_"), c("x_", "y_")))
+copy_to(mmap, ecoregiondat, temporary = FALSE, indexes = list("Ecoregion"))
+```
+
+### Usage
+
+#### A function
+
+```{r}
+get_ecoregion <- function(region = c("Greenland Sea", "Iceland Sea")) {
+  
+  path <- system.file("extdata/mmap.sqlite3", package = "mmap")
+  mmap <- dplyr::src_sqlite(path)
+  
+  d <- 
+    dplyr::tbl(mmap, "ecoregiondat") %>% 
+    dplyr::filter(Ecoregion %in% region) %>% 
+    dplyr::inner_join(tbl(mmap, "ecoregion"), by = "object_") %>% 
+    dplyr::collect() %>% 
+    dplyr::select(region = Ecoregion, long = x_, lat = y_, group = branch_)
+  
+  return(d)
+  
+}
+```
+
+#### Example
+
+```{r}
+m <- get_ecoregion()
+
+ggplot() +
+  geom_polypath(data = m, aes(long, lat, group = group, fill = region)) +
+  coord_quickmap()
+```
+
+## Depths (Sjómælingar)
+
+The raw data were obtained from Icelandic Coastguard - Hydrographic Department via Julian Burgos through an e-mail dated 2015-06-29:
+```
+Hi Einar,
+I haven't had the time to add them to the gisland package.  But here are
+the shapefiles.  When I asked Árni Vésteinsson about the sources of the
+data, he answered this:
+"The contours come from our Nautical Charts at scale 1:100.000 and smaller
+(300.000, 1:1000.000).
+Our Chart Catalogue is here:
+http://www.lhg.is/starfsemi/sjomaelingasvid/sjokort/kortaskra/
+The charts that I am refering to are the Coastal and Transit charts, page
+6 and 8.
+The data source is mainly ICG Hydrographic Department. There are other
+sources too but I suppose you don´t want all the details."
+```
+
+The raw data are found within the `data_sp_raw`-directory:
+```{r, echo = FALSE}
+dir("/home/einarhj/stasi/gis/sjomaelingar/data_sp_raw")
+```
+
+### Processing
+
+The main objective was to create spatial polygons from the spatial lines objects.
+
+#### Cleaning the spatial lines objects
+
+The original shape data in `data_sp_raw/Isl_dyp_lin_290115` are spatial lines. Each depth was separated into a separate object using the script 'R/01_separated_z.R` and saved in directory `data_spatial_lines`:
+
+```{r, echo = FALSE, message = FALSE}
+library(dplyr)
+library(stringr)
+dir("/home/einarhj/stasi/gis/sjomaelingar/data_spatial_lines", pattern = ".dbf") %>%
+  str_replace(".dbf","")
+```
+
+Some line objects needed to be cleaned:
+
+* Line segments in some areas, particularily in Ísafjarðardjúp were joined.
+* Closing of some line objects to form a "polygon"
+* Cleaning of some line objects because of intersection problems.
+
+This process was done manually in qgis. The cleanded objects were saved under the same file name in the `data_spatial_lines`-directory (see above).
+
+#### Creation of spatial polygons
+
+Spatial polygons objects were generated from spatial lines objects using the following scripts:
+```{r, echo = FALSE}
+dir("/home/einarhj/stasi/gis/sjomaelingar/R", pattern = "02")
+```
+
+
+### Output examples
+
+See:
+
+* [leaflet map](sjomaelingar.html) - generated via `R/03leaflet.R`
+* qgis file `sjomaelingar.qgs` in the root of the working directory
+
+#### To do
+
+- Put the separate depth polygons files into one file
+
+#### Loading
+
+```{r, eval = FALSE}
+library(ggplot2)
+library(ggpolypath)
+library(rgdal)
+files <- dir("/home/einarhj/stasi/gis/sjomaelingar/data_spatial_lines",
+             pattern = ".shp") %>% 
+  str_replace(".shp","")
+
+Z <- readOGR(dsn = "/home/einarhj/stasi/gis/sjomaelingar/data_spatial_lines/",
+             layer = files[1]) %>% 
+  spTransform(gisland::PRO)
+Z <-  spChFIDs(Z, paste(row.names(Z), Z$MinZ, sep = "_"))
+
+for (i in 2:length(files)) {
+  z <- readOGR(dsn = "/home/einarhj/stasi/gis/sjomaelingar/data_spatial_lines/",
+             layer = files[i]) %>% 
+  spTransform(gisland::PRO)
+  z <-  spChFIDs(z, paste(row.names(z), z$MinZ, sep = "_"))
+  #print(paste(i, files[i]))
+  #print(row.names(z)[1])
+  Z <- spRbind(Z, z)
+}
+
+depth <- 
+  Z %>% 
+  gisland::fortify2() %>% 
+  select(z = Minz, group, long = lon, lat)
+#mmap$con %>% db_drop_table(table='depth')
+
+mmap <- src_sqlite("/home/einarhj/r/Pakkar/mmap/inst/extdata/mmap.sqlite3")
+
+# check the correct order
+copy_to(mmap,
+        depth,
+        temporary = FALSE)
+```
+
+Alternatives (not working):
+```{r, eval = FALSE}
+src_sqlite("test.sqlite", create = TRUE)
+writeOGR(Z, "/home/einarhj/prj/fishy-data/test.sqlite",layer = "Z", driver = "SQLite",
+         dataset_options=c("SPATIALITE=yes"))
+writeOGR(Z, dsn="./test.sqlite",layer="test",driver= "SQLite",overwrite_layer=TRUE)
+writeOGR(Z, dsn="./test.sqlite",layer="test",driver= "SQLite")
+writeOGR(Z, dsn="/home/einarhj/prj/fishy-data/test.sqlite",layer="test",driver= "SQLite",overwrite_layer=TRUE)
+writeOGR(Z, dsn="/home/einarhj/prj/fishy-data/test.sqlite",layer="test",driver= "SQLite")
+```
+
+#### Example
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+mmap <- src_sqlite("/home/einarhj/r/Pakkar/mmap/inst/extdata/mmap.sqlite3")
+depth <- tbl(mmap, "depth")
+
+d2 <-
+  depth %>% 
+  filter(between(long, -24, -22),
+         between(lat, 65, 65.5)) %>% 
+  collect()
+
+ggplot() +
+  theme_bw() +
+  geom_path(data = d2, aes(long, lat, group = group, colour = factor(z)), lwd = 0.3) +
+  scale_colour_brewer(palette = "Set1") +
+  geom_polygon(data = gisland::iceland, aes(long, lat, group = group), fill = "grey90") +
+  coord_quickmap(xlim = c(-24, -22), ylim = c(65, 65.5)) +
+  labs(x = NULL, y = NULL, colour = "depth")
+```
+

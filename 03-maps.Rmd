@@ -1,0 +1,101 @@
+# On map backgrounds {#map}
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggpolypath)
+```
+
+## Objects in the map package
+
+The \code{map}-package provides some
+
+### Some gisland wrappers
+
+ In the \code{gisland}-package
+```{r, eval = FALSE}
+m <- gisland:::map_data2(region = "North Sea")
+ggplot() +
+  geom_polygon(data = m, aes(long, lat, group = group)) +
+  coord_quickmap()
+```
+
+## Objects in the mmap package
+
+```{r}
+library(mmap)
+ls("package:mmap")
+
+m <- ecoregion[ecoregion$Ecoregion %in% "Iceland Sea",]
+dim(fortify(m))
+ggplot() +
+  geom_polypath(data = m, aes(long, lat, group = group)) +
+  coord_map()
+
+m <- 
+  ecoregion.thinned %>% 
+  filter(Ecoregion %in% "Iceland Sea")
+dim(m)
+ggplot() +
+  geom_polypath(data = m, aes(long, lat, group = group)) +
+  coord_map()
+```
+
+## google maps and relatives
+
+### ggmap package
+
+```{r}
+library(ggmap)
+ns <- get_map(location = c(lon = 5, lat = 55),
+              zoom = 5,
+              maptype = "satellite")
+data("harbours", package = "vmstools")
+ggmap(ns) +
+  geom_point(data = harbours, aes(lon, lat), col = "red", size = 0.25) +
+  labs(x = NULL, y = NULL)
+```
+
+### Some homebrew
+
+```{r}
+library(gisland)
+bbox <- c(left = -25.5, bottom = 63, right = -12, top = 67.5)
+m <- get_sjokort(bbox = bbox, maptype = "sjm")
+m +
+  geom_path(data = landhelgi_sldf, aes(long, lat, group = group), col = "red") 
+```
+
+```{r}
+m <- get_sjokort(bbox <- c(left = -32, bottom = 59.5, right = 12, top = 70),
+                 maptype = "norwegian")
+m +
+  geom_path(data = landhelgi_sldf, aes(long, lat, group = group), col = "red") +
+  geom_path(data = eez_sldf, aes(long, lat, group = group), col = "blue") 
+```
+
+```{r}
+m <- get_sjokort(bbox <- c(left = -32, bottom = 59.5, right = 12, top = 70),
+                 maptype = "norwegian")
+m +
+  geom_path(data = landhelgi_sldf, aes(long, lat, group = group), col = "red") +
+  geom_path(data = eez_sldf, aes(long, lat, group = group), col = "blue") 
+```
+
+```{r}
+maptype = c("World_Imagery", "Ocean_Basemap", 
+        "NatGeo_World_Map", "World_Physical_Map", "World_Shaded_Relief", 
+        "World_Street_Map", "World_Terrain_Base", "World_Topo_Map")
+for (i in 1:length(maptype)) {
+  print(maptype[i])
+  m <- get_arcgismap(maptype = maptype[i]) +
+    geom_path(data = landhelgi_sldf, aes(long, lat, group = group)) +
+    geom_path(data = eez_sldf, aes(long, lat, group = group))
+  print(m)
+}
+```
