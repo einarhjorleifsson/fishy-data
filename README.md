@@ -1,3 +1,8 @@
-This is a minimal example of a book based on R Markdown and **bookdown** (https://github.com/rstudio/bookdown). Please see the page "Get Started" at https://bookdown.org/ for how to compile this example.
+A place to organize.
 
-You can find the preview of this example at https://bookdown.org/yihui/bookdown-demo/
+To render the stuff do:
+```
+bookdown::render_book("index.Rmd", "bookdown::gitbook")
+```
+
+Preview to be placed soon at http://www.hafro.is/~einarhj/...
