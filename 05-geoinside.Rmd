@@ -1,4 +1,4 @@
-# Attributes
+# On point attributes
 
 ```{r include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, 
@@ -12,6 +12,14 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(ggpolypath)
+
+theme_map <- function(base_size = 12, base_family = "") {
+  theme_bw(base_size = base_size, base_family = base_family) %+replace% 
+        theme(axis.title.x = element_text(size = rel(0)),
+              axis.title.y = element_text(size = rel(0)))
+}
+  
+theme_set(theme_map())
 ```
 
 ## Finding point attributes
@@ -20,21 +28,19 @@ When working with spatial data one is often interested in finding the attributes
 
 Generally we would have:
 
-* A vector of longitude and latitude points
+* A vector of longitude and latitude coordinates
 * A spatialPolygonDataFrame with some attributes
 
 What we would like as the output is:
 
-* A vector of same length as the points
+* A vector of same length as the points that represents the region that the coordinates correpond to.
 
 ### Examples
 
 #### ICES area
 
 ```{r}
-ices.area <- rgdal::readOGR(dsn = "/home/einarhj/stasi/gis/ices/shapes_modified",
-               layer = "ICES_areas_simplifed_tolerance005")
-map <- ices.area[ices.area$ICES_area %in% c("Va1", "Va2"),]
+map <- mmap::areas[mmap::areas$region %in% c("Va1", "Va2"),]
 class(map)
 ```
 
@@ -53,65 +59,111 @@ station <-
 
 If we were interested in obtaining the "ICES_area" to which the points belong to one could do:
 ```{r}
-station <-
+st <-
   station %>% 
-  mutate(strata = geo_inside(long, lat, map, variable = "ICES_area"))
-glimpse(station)
-station %>% 
+  mutate(strata = geo_inside(long, lat, map, variable = "region"))
+glimpse(st)
+st %>% 
   group_by(strata) %>% 
   summarise(n = n())
 ```
 
-So here we have `r length(station$strata[station$strata %in% "Va1"])` points that fall within strata Va1, `r length(station$strata[station$strata %in% "Va2"])` points that fall within strata Va2 and `r sum(is.na(station$strata))` points that are outside those two stratas. A visual representation can be obtained as:
+So here we have `r length(st$strata[st$strata %in% "Va1"])` points that fall within strata Va1, `r length(st$strata[st$strata %in% "Va2"])` points that fall within strata Va2 and `r sum(is.na(st$strata))` points that are outside those two stratas. A visual representation can be obtained as:
 ```{r}
 ggplot(map, aes(x = long, y = lat)) +
-  theme_bw() +
-  geom_polypath(aes(group = group), fill = "grey90") +
-  geom_path(aes(group = group), col = "yellow") +
-  geom_point(data = station, aes(col = strata), size = 1) +
+  geom_polypath(aes(group = group), fill = "grey") +
+  geom_path(aes(group = group), col = "black") +
+  geom_point(data = st, aes(col = strata), size = 1) +
   coord_quickmap()
 ```
 
-Take note that points that are on land (within the Icelandic shoreline) are not included within strata Va2. This is because the shorelines are defined as "holes" within the map-object.
+Take note that points that are on land (within the Icelandic shoreline) are not included within strata Va2. This is because the shorelines are defined as "holes" within the Va2 object.
 
-If one were only interested in subsetting the data set, keeping only the points that fall within an area one could simply not specify the variable name to return:
+If one were only interested in subsetting the data set, keeping only the points that fall within an area one could simply not specify the variable name in the `geo_inside`-function. The output would then simply be a boolean vector which one could pass to the `dplyr::filter`-function.
 
 ```{r}
-set.seed(16)
-station <- 
-  data_frame(long = runif(1000, -28, -9),
-             lat  = runif(1000, 61.5, 68.5)) %>% 
-  filter(geo_inside(long, lat, map))
-nrow(station)
+station %>%  
+  filter(geo_inside(long, lat, map)) %>% 
+  nrow()
 ```
 
 #### Points on land
 
-This is kind of a reverse problem from the one above. In order to exclude data points on land one could do:
-
+This is kind of a reverse problem from the one above. In order to classify if coordinates fall on land one could do:
 ```{r}
-set.seed(16) #16 works - get one point on Vestmanneyjar
-station <- 
-  data_frame(long = runif(1000, -28, -9),
-             lat  = runif(1000, 61.5, 68.5)) %>% 
+st <- 
+  station %>% 
   mutate(on_land = geo_inside(long, lat, biceland))
+st %>% 
+  group_by(on_land) %>% 
+  summarise(n = n())
+```
 
-station %>% 
-  filter(on_land) %>% 
+Visually we have:
+```{r}
+st %>% 
   ggplot() +
-  theme_bw() +
-  geom_polygon(data = biceland, aes(long, lat, group = group), fill = "grey90") +
-  geom_point(aes(long, lat), col = "red") +
+  geom_polygon(data = biceland, aes(long, lat, group = group), fill = "grey") +
+  geom_point(aes(long, lat, colour = on_land), size = 1) +
   coord_quickmap()
 ```
 
-One could think that one of the point on the map (the southernmost one) has been wrongly classified on land. That is however not the case because it falls within one of the small islands of Vestmannaeyjar.
+One could think that one of the point on the map (the southernmost on_land point) has been wrongly classified. That is however not the case because it falls within one of the small islands of Vestmannaeyjar.
 
 If one were to exclude the points on land one would use `filter(!on_land)` in the pipe above.
 
+#### Points in vicinity of some coordinates
 
-#### Points in vicinity of other points
+We may be interested in excluding points that are in vicinity of some coordinates, like points in the vicinity of harbour. If coordinates are only given up as a points, like in a data.frame we need first somehow to convert the data to spatial objects. This can be achieved using the `gisland::expand_sp`-function (a simple wrapper around the `rgeos::gBuffer`-function).
 
-Like points close to harbour.
+The process as follows:
 
-....
+* We have a data.frame of interest
+* Generate a spatial point dataframe
+* Generate a spatial polygon were each of the point is "expanded" to a circle by specifying some radius (here 10 miles)
+* Identify the points that fall within the spacial polygon (vicinity to e.g. harbour)
+
+
+```{r}
+df <- data.frame(long = c(-20, -15),
+                 lat = c(64, 64))
+sp <- 
+  SpatialPointsDataFrame(df, df, proj4string = PRO) %>% 
+  expand_sp(miles = 20)
+# note would really like to generate a sp-dataframe so we also have attributes
+
+st <- 
+  station %>% 
+  filter(!geo_inside(long, lat, iceland)) %>% 
+  mutate(in_harbour = geo_inside(long, lat, sp)) 
+st %>% 
+  ggplot(aes(long, lat)) +
+  geom_polypath(data = iceland, aes(group = group), fill = "grey90") +
+  geom_path(data = sp, aes(group = group)) +
+  geom_point(aes(colour = in_harbour)) +
+  coord_quickmap()
+```
+
+The `gisland::expand_sp`-function can be used on spatitalPolygons. E.g. if we were interested in locating points that are within 12 mile vicinity of the icelandic coast we could:
+```{r}
+sp <- expand_sp(iceland, miles = 12) # takes a while
+st <-
+  station %>% 
+  filter(!geo_inside(long, lat, iceland)) %>% 
+  mutate(within_3_miles = geo_inside(long, lat, sp))
+
+st %>% 
+  ggplot(aes(long, lat)) +
+  geom_polypath(data = iceland, aes(group = group), fill = "grey90") +
+  geom_path(data = sp, aes(group = group)) +
+  geom_point(aes(colour = within_3_miles)) +
+  coord_quickmap()
+```
+
+As seen in the above cases the procedures of finding coordinate attributes is always the same:
+
+* pass vector of coordinates and a spatial polygon to the `geo_inside` function.
+* if needed, generate a spatial polygon or modify existing one with the help of the `expand_sp` function.
+
+The generation of spatial objects is an art in itself, something that will not be dealt more than the limited examples provided above.
+

@@ -2,22 +2,172 @@
 
 ```{r include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, 
-                      message = FALSE)
+                      message = FALSE, 
+                      warning = FALSE)
 ```
 
+
 ```{r}
+library(broom)
 library(dplyr)
 library(ggplot2)
 library(ggpolypath)
+library(cowplot)
+library(maps)
+library(mapdata)
+library(mmap)
+library(sp)
+
+theme_map <- function(base_size = 12, base_family = "") {
+  theme_bw(base_size = base_size, base_family = base_family) %+replace% 
+        theme(axis.title.x = element_text(size = rel(0)),
+              axis.title.y = element_text(size = rel(0)))
+}
+  
+theme_set(theme_map())
 ```
 
-## Objects in the map package
+## Objects in the map & mapdata package
 
-The \code{map}-package provides some
+Low resolution country coordinates are available in the `map`-packages.
+
+```{r}
+m1 <- map("world", region = "Denmark", plot = FALSE, fill = TRUE)
+```
+
+The above returns a list object. The `map_data` function in the ggplot2-packages returns a convenient a wrapper of the above which then is "fortified" to a dataframe:
+
+```{r}
+m1 <- map_data("world", "Denmark")
+```
+
+The function `map_data` always returns the following columns:
+
+* __long__: Longitudinal coordinates
+* __lat__:  Latitudinal coordinates
+* __group__: A variable, unique to each polygon
+* __order__: The plotting order
+* __region__: Attribute of the point
+* __subregion__: Attribute of the point
+
+Aside from the column containing the coordinates the group variable is the most important. It basically is a unique identifier specifying the polygon to which a particular point belongs to. In order to visualize the data one the following serves as an illustration:
+```{r}
+p <- ggplot(m1, aes(long, lat)) + coord_quickmap()
+p1 <- p + geom_point() + labs(title = "point")
+p2 <- p + geom_line() + labs(title = "line")
+p3 <- p + geom_path() + labs(title = "path")
+p4 <- p + geom_path(aes(group = group)) + labs(title = "path w. group")
+plot_grid(p1, p2, p3, p4)
+```
+
+Somewhat higher resolution of countries is provided in the `mapdata`-package.
+ 
+```{r}
+m2 <- map_data("worldHires", "Denmark") %>% filter(long > 5)
+ggplot() +
+  aes(long, lat, group = group) +
+  geom_path(data = m2, col = "red") +
+  annotate("text", x = 13, y = 57.8, label = paste0("high resolution (",nrow(m2)," data points)"), col = "red") +
+  geom_path(data = m1, col = "blue") +
+   annotate("text", x = 13, y = 58, label = paste0("low resolution (",nrow(m1)," data points)"), col = "blue") +
+  coord_quickmap()
+```
+
+As seen in the above the difference is quite substantial. In general the resultion needed depends on the objectives (usage).
+
+## ESRI shape files
+
+In the __mmap__-package we have incorporated the ICES ecoregions as a thinned ESRI shapefile object which we will use here as a demonstration:
+```{r}
+?ecoregion
+```
+
+The object attributes are:
+```{r}
+glimpse(ecoregion@data)
+```
+
+Spatial objects can be passed directly to ggplot. What happens under the hood though is that these objects are first converted to a dataframe via the `ggplot2::fortify`-function. This function is being superseeded with the `broom::tidy`-function:
+```{r}
+glimpse(tidy(ecoregion))
+```
+
+Again, here the column of interests for plotting are long, lat and group
+```{r}
+ggplot() +
+  geom_path(data = ecoregion, aes(long, lat, group)) +
+  coord_map("ortho", orientation = c(75, -22, 0))
+```
+
+As seen above the attributes are not returned when using the `tidy`-function. A simple wrapper to ammend that is provide in the `gisland::tidy2`-function:
+```{r}
+eco <- gisland::tidy2(ecoregion)
+glimpse(eco)
+```
+
+```{r}
+ggplot() +
+  geom_polypath(data = eco, aes(long, lat, group, fill = region)) +
+  theme(legend.position = "none") +
+  coord_map("ortho", orientation = c(75, -22, 0))
+```
+
+Here we use the `ggpolypath::geom_polypath`-function rather than the `ggplot2::geom_polygon`-function because the former deals properly with "holes".
+
+Another example:
+```{r}
+areas %>% 
+  gisland::tidy2() %>% 
+  ggplot() +
+  geom_polypath(aes(long, lat, group = group, fill = region)) +
+  geom_path(aes(long, lat, group = group), lwd = 0.5) +
+  theme(legend.position = "none") +
+  coord_map("ortho", orientation = c(75, -22, 0))
+```
+
+TODO: Think in terms of the chloropleth - in order to save space.
+
+## Backgrounds
+
+```{r, eval = FALSE}
+#http://gis.stackexchange.com/questions/76299/web-mapping-service-with-gebco-bathymetry-data
+#  http://maps.ngdc.noaa.gov/arcgis/rest/services/web_mercator/gebco08_contours/MapServer/tile/{z}/{y}/{x}
+library(leaflet)
+leaflet() %>% 
+addTiles(urlTemplate = "http://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+           attribution = 'Data source: <a href="http://www.hafro.is">Marine Rearch Institute</a>',
+           group = "Hnöttur")
+leaflet() %>% 
+addTiles(urlTemplate = "http://maps.ngdc.noaa.gov/arcgis/rest/services/web_mercator/gebco08_contours/MapServer/tile/{z}/{y}/{x}",
+           attribution = 'Data source: <a href="http://www.hafro.is">Marine Rearch Institute</a>',
+           group = "Hnöttur")
+```
+
+
+```{r, eval = FALSE}
+# Some code on fortify
+
+# http://stackoverflow.com/questions/22096787/how-keep-information-from-shapefile-after-fortify
+# 1. approach
+# fortify the shape file
+map.df <- fortify(shape, region = "CD_GEOCODI")
+# merge data
+map.df <- left_join(map.df, data, by=c("id" = "CD_GEOCODI"))
+
+# 2. approach
+shps <- maptools::readShapePoly(fn = file.path("file",
+                                               "path",
+                                               "no extension"),
+                                     # Column with unique IDs
+                                     IDvar = "geoID")
+shpsFort <- ggplot2::fortify(model = shps)
+```
+
 
 ### Some gisland wrappers
 
- In the \code{gisland}-package
+In the __gisland__-package:
+
 ```{r, eval = FALSE}
 m <- gisland:::map_data2(region = "North Sea")
 ggplot() +
@@ -27,18 +177,14 @@ ggplot() +
 
 ## Objects in the mmap package
 
-```{r}
-library(mmap)
-ls("package:mmap")
-
-m <- ecoregion[ecoregion$Ecoregion %in% "Iceland Sea",]
-dim(fortify(m))
+```{r, eval = FALSE}
+m <- mmap::ecoregion[ecoregion$Ecoregion %in% "Iceland Sea",]
 ggplot() +
   geom_polypath(data = m, aes(long, lat, group = group)) +
   coord_map()
 
 m <- 
-  ecoregion.thinned %>% 
+  mmap::ecoregion.thinned %>% 
   filter(Ecoregion %in% "Iceland Sea")
 dim(m)
 ggplot() +
@@ -91,11 +237,15 @@ m +
 maptype = c("World_Imagery", "Ocean_Basemap", 
         "NatGeo_World_Map", "World_Physical_Map", "World_Shaded_Relief", 
         "World_Street_Map", "World_Terrain_Base", "World_Topo_Map")
+p <- list()
 for (i in 1:length(maptype)) {
-  print(maptype[i])
-  m <- get_arcgismap(maptype = maptype[i]) +
-    geom_path(data = landhelgi_sldf, aes(long, lat, group = group)) +
-    geom_path(data = eez_sldf, aes(long, lat, group = group))
-  print(m)
+  m <- gisland:::get_arcgismap(maptype = maptype[i]) +
+    geom_path(data = gisland::landhelgi_sldf, aes(long, lat, group = group)) +
+    geom_path(data = gisland::eez_sldf, aes(long, lat, group = group)) +
+    labs(title = maptype[i])
+  p[[i]] <- m
 }
+
+plot_grid(p[[1]], p[[2]], p[[3]], p[[4]],
+          p[[5]], p[[6]], p[[7]], p[[8]])
 ```

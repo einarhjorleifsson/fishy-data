@@ -14,3 +14,6 @@ description: "Just some bits and pieces"
 
 # Preamble
 
+```
+bookdown::render_book("index.Rmd", "bookdown::gitbook")
+```

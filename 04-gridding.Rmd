@@ -1,27 +1,332 @@
-# On gridding data
+# On gridlocks
 
 __Comment__: Need a better title (e.g. summarizing 3d data)
 
 ```{r include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, 
-                      message = FALSE)
+                      message = TRUE)
 ```
 
 ```{r}
+library(leaflet)
 library(gisland)
 library(dplyr)
 library(tidyr)
+library(broom)
 library(ggplot2)
+library(ggalt)
+library(maps)
 library(viridis)
 ```
 
+Check out: https://github.com/sinhrks/ggfortify
 __A hidden gem?__
 
 `ggplot2::geom_tile`
 
 __Leftover statement__: A very modern example of the (ab)use of such mapping of continuous values is the classification found in the ICES stock summary.)
 
-## On gridding data
+## On gridded data
+
+Statistics of two dimentional continuous data (x and y, longitudes and latitudes, ...) are often summarise by mapping the raw data on to a discontinuous grid. The grid is normally composed of tiles (rectangle) all of equal size.
+
+A classical case where high resolution data have been condensed to tiles are the long established catch and effort statistics of the UK fleet, reported by statistical rectangles with a 1° longitude and 0.5° latitude resolution.
+
+```{r, echo = FALSE}
+attach("/home/einarhj/stasi/ukSeaCharts.RData")
+ukSeaCharts %>% 
+  filter(species == 1,
+         year == 1932) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_tile(aes(lon, lat, fill = catch)) + 
+  facet_wrap(~ month) +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  coord_quickmap() +
+  scale_x_continuous(NULL, NULL) +
+  scale_y_continuous(NULL, NULL) +
+  geom_polygon(data = iceland, aes(long, lat, group = group), fill = "grey") +
+  labs(title = "Catch distribution of cod by UK fleet by months in 1932")
+```
+
+### ICES rectangles
+
+The english trawl data are reported at the same resolution as the more modern [ICES rectangles encoding system](http://ices.dk/marine-data/maps/Pages/ICES-statistical-rectangles.aspx). The latter cover the area between 36°N and 85°30'N and 44°W and 68°30'E, with a resolution of 1° longitude and 0.5° latitude.
+
+```{r, echo = FALSE}
+ices <- data_frame(x = c(-44, -44,   68.5, 68.5, -44),
+                y = c( 36,  83.5, 83.5, 36,    36),
+                sq = "ICES")
+tilk <- data_frame(x = c(-50, -50,  0,  0, -50),
+                   y = c( 60,  70, 70, 60,  60),
+                   sq = "Iceland")
+r <- bind_rows(ices, tilk)
+world <- map_data("world")
+worldmap <- ggplot(world) +
+  geom_polygon(aes(long, lat, group = group)) +
+  scale_y_continuous(NULL, breaks = (-2:3) * 30, labels = NULL) +
+  scale_x_continuous(NULL, breaks = (-4:4) * 45, labels = NULL)
+
+worldmap + 
+  coord_map("ortho", orientation = c(75, -22, 0)) +
+  geom_polygon(data = r, aes(x, y, fill = sq), alpha = 0.5) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(fill = "Encoding")
+```
+
+Figure showing the extent of the ICES and Iceland tile encoding system.
+
+
+TODO: Fix the rectangle label position
+
+```{r, echo = FALSE}
+ices <- 
+  expand.grid(x = seq(-43, 68, by = 1.0),
+              y = seq( 36, 85,  by = 0.5)) %>% 
+  tbl_df() %>% 
+  mutate(sq =  encode(x, y, type = "ices"),
+         sq2 = decode(sq)) %>% 
+  separate(sq2, c("long","lat"), sep = ":", convert = T) %>% 
+  select(-x, -y)
+
+m <- map("world", plot = FALSE, fill = TRUE) %>% tidy()
+cntr <- 
+  m %>% 
+  filter(between(long, -43, 68),
+         between(lat,   36, 85)) %>% 
+  select(region) %>% 
+  distinct()
+m <- 
+  m %>% 
+  filter(region %in% cntr$region)
+
+x.breaks <- sort(unique(ices$long))
+x.label  <- sort(unique(stringr::str_sub(ices$sq,3,4)))
+y.breaks <- sort(unique(ices$lat))
+y.label  <- sort(unique(stringr::str_sub(ices$sq,1,2)))
+ices %>% 
+  ggplot(aes(long, lat)) +
+  theme_bw() +
+  geom_polygon(data = m, aes(long, lat, group = group), fill = "grey90") +
+  geom_tile(fill = NA, col = "white", lwd = 0.05) +
+  coord_quickmap(xlim = c(-32, -6), ylim = c(61, 68)) +
+  scale_x_continuous(NULL, breaks = x.breaks, labels = x.label) +
+  scale_y_continuous(NULL, breaks = y.breaks, labels = y.label)
+```
+
+An alternative view is via the leaflet:
+
+TODO: get the full ices rectangle grid - make as raster
+```{r}
+# works but a loaded solution
+# Note need to get just the ICES_Statistical_Rectangle (not Eco)
+ices <- rgdal::readOGR(dsn = "/home/einarhj/stasi/gis/ices/", 
+                       layer = "ICES_Statistical_Rectangles_Eco",
+                       verbose = FALSE)
+leaflet(ices) %>% 
+  # get the arcismap
+  addTiles() %>% 
+  setView(lng = -22, lat = 64, zoom = 5) %>% 
+  setMaxBounds(lng1 = -43, lng2 = 68, lat1 = 36, lat2 = 85) %>% 
+  addPolygons(color = "white",
+              weight = 1,
+              label = ices$ICESNAME)
+```
+
+__TODO__: ICES subrectangle system?? see: 
+
+### "Tilkynningaskyldureitur"
+
+In Iceland fisheries statistics have since 19xx?? been reported to a native numerical encoding system. It covers area between from 60°N to 70°N and 0°W to 66°W. It has the same resolution and boundaries as the ICES system. The numerical code goes from 1 to 999, starting in the southeastern corner, filling westward along each latitude up to 50, ending at 999 in the northwestern corner.
+
+```{r, echo = FALSE, eval = FALSE}
+# iceland tiles
+df <- 
+  data_frame(x = c(100:999)) %>% 
+  mutate(sq = decode(x, type = "iceland")) %>% 
+  separate(sq, c("long", "lat"), sep = ":", convert = TRUE)
+df %>% 
+  ggplot(aes(long, lat, fill = x)) +
+  theme_bw() +
+  geom_raster() +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  coord_quickmap()
+df <- expand.grid(x = c(100:999),
+                  x2 = c(1:4)) %>% 
+  mutate(x = x * 10 + x2,
+         sq = decode(x, type = "iceland")) %>% 
+  separate(sq, c("long", "lat"), sep = ":", convert = TRUE)
+df %>% 
+  ggplot(aes(long, lat, fill = x)) +
+  theme_bw() +
+  geom_raster() +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  coord_quickmap()
+```
+
+### C-squares
+
+[C-squares](https://en.wikipedia.org/wiki/C-squares) is "a system of geocodes (actually a type of global grid) that provides a basis for simple spatial indexing of geographic features or data". Unlike the ICES statistical rectangle notation the system is global and the resolution can vary (0.01°, 0.05°, 0.1°, 0.5°, 1.0°, 5.0° and 10.0°) but is the same in longitudinal and latitudinal degree units. This format is e.g. used in ICES response to OSPAR fisheries requests.
+
+TODO: demo
+```{r, echo = FALSE, eval = FALSE}
+# csquare
+
+```
+
+
+In the above case, as in any other rectangle/tile code system one needs to decode a one dimentional vector (normally a character) into some (dis-)continous values that are suitable for plotting. In the above case this is done with the `decode_tile`-function.
+
+... the problem is the same, to decode one dimentional character vector into x- and y-dimensions so it can be plotted. In the above case, we use the same `decode_tile`-function but specify instead of using the default (system = "ICES") we use (system = "csquare").
+
+### Z(iggy)-tiles
+
+In the above we have returned a character vector where the longitude and latitude central coordinates are separated by a `:`. This type of tile coding system is inspired by the `geo::d2dr`-function created by Sigurður Þór Jónsson. In acknowledgment to the author I refer to this tile convention as __Z-tiles__. It has the advantages over the ICES statistical rectangle system and the Icelandic "Tilkynningaskyldureitur" that it is global. In addition it has the advantage over the C-square system in that the resolution can be anything and is not limited by having equal degree-resolution in the longitude and latitude. In fact, any of the above notations are encompassed within the S-tiles encoding system.
+
+The encoding of the Z-tiles (i.e. from individual longitude and latitude observations) is described below. Since the decoding of such a system are intuatively done using the `separate`-function no necessary examples are needed.
+
+```{r}
+df <- data.frame(lon = c(runif(4,  -1,   0),
+                         runif(4, 179, 180)),
+                 lat = c(runif(4,  60,  61),
+                         runif(4, -31, -30)))
+df %>% 
+  mutate(icel = encode(lon, lat, type = "iceland"),
+         ices = encode(lon, lat, type = "ices"),
+         csquare  = encode(lon, lat, 0.5, type = "csquare"),
+         ztile  = encode(lon, lat, c(1, 0.5)))
+```
+
+## On tiling data
+
+In modern times the "raw" logbook data are normally recorded (at least should) at a much higher resolution. In the Icelandic logbook database the start and end position of each trawl haul has been recorded since 19xx. A generic approach to "round" a continous x- and y-values to a central position is provided by the `gisland::tile_encode` function. Let's take an arbriary example:
+
+```{r}
+df.raw <- 
+  data_frame(lon = rnorm(2000, -22, 2),
+             lat = rnorm(2000, 66, 1))
+ggplot(df.raw, aes(lon, lat)) +
+  geom_point(alpha = 0.2) +
+  coord_quickmap()
+```
+
+If we were to count the number of events (points) within a rectangle of same resolution as the ICES rectangle we can do:
+```{r}
+df <-
+  df.raw %>% 
+  mutate(sq = encode(lon, lat))
+glimpse(df)
+```
+
+In the above we have simply "rounded" each record of lon's and the lat's to the defined tile resolution encoded in the character variable `sq`, where the midpoint x- and the y-values are separated by a `:`. To e.g. count the number of records in each tile and return the numerical midpoint values for each tile we simply do:
+```{r}
+df <- 
+  df %>% 
+  group_by(sq) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE, remove = FALSE)
+df
+```
+The `remove = FALSE` is here simply used for illustrative purpose.
+
+Now to visualize the tile statistics we use the `geom_raster` function:
+```{r}
+df %>% 
+  ggplot(aes(lon, lat)) +
+  theme_bw() +
+  geom_raster(aes(fill = n)) +
+  geom_point(data = df.raw, aes(lon, lat), colour = "red", size = 0.25) +
+  geom_text(aes(label = n), colour = "yellow", angle = 45) +
+  coord_quickmap()
+```
+
+An attempt to provide generic approach is wrapped in the `gisland::encode` function:
+
+```{r, message = FALSE}
+attach("/home/einarhj/prj/2016_trawlfootprint/data/2013_logbooks_and_vms.rda")
+base <- stofn
+tows <-
+  base %>% 
+  select(t1, t2, vid, gid, visir) %>% 
+  filter(!is.na(t2),
+         gid %in% 6)
+vms2 <- 
+  vms %>% 
+  mutate(visir = lookup_interval_ids(posdate, vid, tows, cn = c("t1", "t2", "vid", "visir"))) %>% 
+  filter(!is.na(visir)) %>% 
+  mutate(sq = encode(lon, lat, c(0.010, 0.005))) %>% 
+  group_by(sq) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE)
+
+vms2 %>% 
+  filter(between(lon, -27, -9),
+         between(lat,  62.8,  67.75)) %>% 
+  mutate(n = ifelse(n > 50, 50, n)) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_polygon(data = iceland, aes(long, lat, group = group), fill = "grey") +
+  geom_raster(aes(lon, lat, fill = n), interpolate = TRUE) +
+  coord_quickmap() +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  labs(x = NULL, y = NULL) +
+  theme(legend.position = c(0.5, 0.4))
+```
+
+```{r}
+data(tacsat, package = "vmstools")
+tacsat %>% 
+  gisland::tidy_tacsat() %>% 
+  select(SI_LONG, SI_LATI) %>% 
+  mutate(sq = encode(SI_LONG, SI_LATI, c(0.50, 0.25))) %>% 
+  group_by(sq) %>% 
+  slice(1)
+```
+
+The function returns the midpoints of a tile, whose resolution is specifed by _dx_ and _dy_ as a character vector where the midpoints are parsed, separated by _:_. Based on this one can start to create various summary statistics on each tile, e.g.
+
+```{r}
+vms2 <- 
+  tacsat %>% 
+  tidy_tacsat() %>% 
+  select(year, SI_LATI, SI_LONG, SI_SP, SI_HE) %>% 
+  mutate(sq = encode(SI_LONG, SI_LATI, c(0.50, 0.25))) %>% 
+  group_by(year, sq) %>% 
+  summarise(n = n(),
+            # not necessarily sensible statistics
+            maxSP = max(SI_SP, na.rm = TRUE),
+            minSP = min(SI_SP, na.rm = TRUE),
+            meanSP = mean(SI_SP, na.rm = TRUE),
+            medianHE = median(SI_HE, na.rm = TRUE))
+glimpse(vms2)
+```
+
+To get back the numerical value of the tile midpoints one can use the `tidyr::separate` function.
+```{r}
+vms2 <- 
+  vms2 %>% 
+  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE)
+glimpse(vms2)
+```
+
+A visual map can then be obtained via the `ggplot2::geom_tile` function:
+
+```{r}
+library(mmap)
+m <- ecoregion[ecoregion$region %in% "Greater North Sea",]
+vms2 %>% 
+  filter(between(lon, -4, 10),
+         between(lat, 25, 58)) %>% 
+  ggplot() +
+  geom_polygon(data = m, aes(long, lat, group = group), fill = "white") +
+  geom_tile(aes(lon, lat, fill = n)) +
+  scale_fill_viridis(option = "B", trans = "reverse") +
+  facet_wrap(~ year) +
+  coord_quickmap()
+rm(vms2)
+```
 
 ```{r, echo = FALSE, eval = FALSE}
 # __Generation of example data__:
@@ -61,7 +366,7 @@ vms2 <-
   inner_join(tows %>% select(tid, towtime, catch)) %>% 
   mutate(catch = catch/n_pings,
          effort = towtime/n_pings) %>% 
-  mutate(sq = tile_encode(lon, lat, dx = 0.010, dy = 0.005)) %>% 
+  mutate(sq = encode(lon, lat, c(0.010, 0.005))) %>% 
   group_by(sq) %>% 
   summarise(n = n(),
             effort = sum(effort),
@@ -106,207 +411,306 @@ vms2 %>%
 
 ```
 
-Statistics of two dimentional continuous data (x and y, longitudes and latitudes, ...) are often summarise by mapping the raw data on to a discontinuous grid. The grid is normally a rectangle (tiles) where all the tiles are the same size. A classical case where high resolution data have been reported/summarised to a tiles are the long established catch and effort statistics of the UK fleet, reported by ICES statistical rectangles (the resolution being 1 degree latitude and $1/2$ degree longitude).
 
-```{r, echo = FALSE}
-attach("/home/einarhj/stasi/ukSeaCharts.RData")
-ukSeaCharts %>% 
-  filter(species == 1,
-         year == 1932) %>% 
-  ggplot() +
-  theme_bw() +
-  geom_tile(aes(lon, lat, fill = catch)) + 
-  facet_wrap(~ month) +
-  scale_fill_viridis(option = "B", trans = "reverse") +
-  coord_quickmap() +
-  scale_x_continuous(NULL, NULL) +
-  scale_y_continuous(NULL, NULL) +
-  geom_polygon(data = iceland, aes(long, lat, group = group), fill = "grey") +
-  labs(title = "Catch distribution of cod by UK fleet by months in 1932")
-```
+## Variable tile size
 
-In modern times the "raw" logbook data are normally recorded (at least should) at a much higher resolution. In the Icelandic logbook database the start and end position of each trawl haul has been recorded since 19xx. A generic approach to "round" a continous x- and y-values to a central position is provided by the `gisland::tile_encode` function. Let's take an arbriary example.
+see: Hans D Gerritsen, Cóilín Minto and Colm Lordan. 2013
 
+simulation code:
 ```{r}
-df.raw <- 
-  data_frame(lon = rnorm(2000, -22, 2),
-             lat = rnorm(2000, 66, 1))
-ggplot(df.raw, aes(lon, lat)) +
-  geom_point(alpha = 0.2) +
-  coord_quickmap()
+## R version 2.15.2
+
+library(rgeos) # needed for readWKT
+library(rgdal) # needed for spTransform
+
+# first specify a function that returns a polygon (grid cell) for any
+# given point
+# gridx and gridy specify the width and height of the polygon rectangle
+# the origin of each grid is (0,0)
+# the output is a Well-Known Text string
+
+poly_fun <- function(lon, lat, gridx, gridy){  
+  # round to the nearest rectangle mid-point
+  lon1 <- round((lon - gridx/2)/gridx , 0) * gridx + gridx/2
+  lat1 <- round((lat - gridy/2)/gridy , 0) * gridy + gridy/2
+  
+  # create WKT sting
+  out <- paste('POLYGON(('
+               ,lon1 - gridx/2 ,' ' ,lat1 - gridy/2 ,', '
+               ,lon1 + gridx/2 ,' ' ,lat1 - gridy/2 ,', '
+               ,lon1 + gridx/2 ,' ' ,lat1 + gridy/2 ,', '
+               ,lon1 - gridx/2 ,' ' ,lat1 + gridy/2 ,', '
+               ,lon1 - gridx/2 ,' ' ,lat1 - gridy/2 ,'))'
+               ,sep='')
+  
+  return(out)
+}
+
+# set the parameters
+gridx <- 0.18 # width of the largest rectangle
+gridy <- 0.16 # height of the largest rectangle
+n <- 2000     # number of simulated datapoints
+
+# simulate some vms data
+vms <- data.frame(lon = rnorm(n, -7.5, 0.15)
+                  ,lat = rnorm(n, 51.25, 0.1)
+                  ,effort_h = 2
+                  ,speed_kmph = rnorm(n, 6.5, 0.5)
+                  ,trawl_width_km = 0.1
+)
+# calculate swept area
+vms$swept_area_km2 <- vms$effort_h * vms$speed_kmph * vms$trawl_width_km
+
+# generate all possible nested rectangles
+# A1 represents the largest rectangles
+# two A2 rectangles fit inside each A1 rectangle
+# two A3 rectangles fit inside each A2 rectangle etc.
+A1 <- poly_fun(vms$lon, vms$lat, gridx, gridy)
+A2 <- poly_fun(vms$lon, vms$lat, gridx, gridy/2)
+A3 <- poly_fun(vms$lon, vms$lat, gridx/2, gridy/2)
+A4 <- poly_fun(vms$lon, vms$lat, gridx/2, gridy/4)
+A5 <- poly_fun(vms$lon, vms$lat, gridx/4, gridy/4)
+
+A6 <- poly_fun(vms$lon, vms$lat, gridx/4, gridy/8)
+A7 <- poly_fun(vms$lon, vms$lat, gridx/8, gridy/8)
+A8 <- poly_fun(vms$lon, vms$lat, gridx/8, gridy/16)
+A9 <- poly_fun(vms$lon, vms$lat, gridx/16, gridy/16)
+
+# count how many points are inside each rectangle
+ag1 <- aggregate(list(count = A1), list(poly = A1), length)
+ag2 <- aggregate(list(count = A2), list(poly = A2), length)
+ag3 <- aggregate(list(count = A3), list(poly = A3), length)
+ag4 <- aggregate(list(count = A4), list(poly = A4), length)
+ag5 <- aggregate(list(count = A5), list(poly = A5), length)
+ag6 <- aggregate(list(count = A6), list(poly = A6), length)
+ag7 <- aggregate(list(count = A7), list(poly = A7), length)
+ag8 <- aggregate(list(count = A8), list(poly = A8), length)
+ag9 <- aggregate(list(count = A9), list(poly = A9), length)
+
+# match the total count for each rectangle to each vms data point
+N1 <- ag1$count[match(A1,ag1$poly)]
+N2 <- ag2$count[match(A2,ag2$poly)]
+N3 <- ag3$count[match(A3,ag3$poly)]
+N4 <- ag4$count[match(A4,ag4$poly)]
+N5 <- ag5$count[match(A5,ag5$poly)]
+N6 <- ag6$count[match(A6,ag6$poly)]
+N7 <- ag7$count[match(A7,ag7$poly)]
+N8 <- ag8$count[match(A8,ag8$poly)]
+N9 <- ag9$count[match(A9,ag9$poly)]
+
+# if an A1 rectangle has at least 20 datapoints, take A2
+# if an A2 rectangle has at least 20 datapoints, take A3 etc
+vms$poly <- ifelse(N1 >= 20, A2, A1)
+vms$poly <- ifelse(N2 >= 20, A3, vms$poly)
+vms$poly <- ifelse(N3 >= 20, A4, vms$poly)
+vms$poly <- ifelse(N4 >= 20, A5, vms$poly)
+vms$poly <- ifelse(N5 >= 20, A6, vms$poly)
+vms$poly <- ifelse(N6 >= 20, A7, vms$poly)
+vms$poly <- ifelse(N7 >= 20, A8, vms$poly)
+vms$poly <- ifelse(N8 >= 20, A9, vms$poly)
+
+# calculate the total swept area in each rectangle
+vms1 <- aggregate(list(swept_area_km2 = vms$swept_area_km2)
+                  ,list(poly = vms$poly), sum) 
+
+# read Well-Known Text and return SpatialPolygons
+FUN <- function(x) {
+  readWKT(x, p4s='+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')
+}
+Srl <- lapply(vms1$poly,FUN)
+
+# project the data to obtain the area of each polygon
+FUN <- function(x) spTransform(x
+                               ,CRS("+proj=utm +zone=29 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+)@polygons[[1]]@Polygons[[1]]@area * 10^-6
+vms1$polygon_area_kmsq <- unlist(lapply(Srl,FUN))
+
+# calculate swept_area_ratio
+vms1$swept_area_ratio <- vms1$swept_area / vms1$polygon_area
+
+# colours for the polygons
+breaks <- seq(0, max(vms1$swept_area_ratio), len=10)
+i <- findInterval(vms1$swept_area_ratio, breaks, all.inside=T)
+vms1$greys <- grey(seq(1, 0, length=length(breaks) ) )[i]
+
+# set up blank plot
+plot(NA, xlim = c(-8, -7), ylim = c(51,  51.5), xlab = 'Longitude'
+     ,ylab = 'Latitude', asp=1.6)
+rect(par('usr')[1],par('usr')[3],par('usr')[2],par('usr')[4]
+     ,density=10,col='grey')
+
+# draw polygons
+for(i in 1:length(Srl)) plot(Srl[[i]], col=vms1$greys[i], add=T)
+
+# add the datapoints & box
+points(vms$lon, vms$lat, cex=0.1, col=4)
+box()
+
+
+# calculate the area that is impacted exactly k times
+# equation (4) from the main manuscript:
+# (equivalent to dpois)
+pm <- function(k, lamda) lamda ^k * exp(-lamda) / factorial(k)
+
+k <- 1
+sum(vms1$polygon_area * pm(k, vms1$swept_area_ratio) )
+k <- 2
+sum(vms1$polygon_area * pm(k, vms1$swept_area_ratio) )
+k <- 5
+sum(vms1$polygon_area * pm(k, vms1$swept_area_ratio) )
+
+# calculate the area that is impacted AT LEAST k times
+# (we empirically established this follows the gamma distribution)
+k <- 1
+sum(vms1$polygon_area * pgamma(vms1$swept_area_ratio, k, 1) )
+k <- 2
+sum(vms1$polygon_area * pgamma(vms1$swept_area_ratio, k, 1) )
+k <- 5
+sum(vms1$polygon_area * pgamma(vms1$swept_area_ratio, k, 1) )
+
+
 ```
 
-If we were to count the number of events (points) within a rectangle of same resolution as the ICES rectangle we can do:
+tidyverse:
 ```{r}
-df <-
-  df.raw %>% 
-  mutate(sq = tile_encode(x = lon, y = lat, dx = 1, dy = 0.5))
-df
+poly_fun <- function(x, y, dx, dy){  
+  # round to the nearest rectangle mid-point
+  lon <- round((x - dx/2)/dx , 0) * dx + dx/2
+  lat <- round((y - dy/2)/dy , 0) * dy + dy/2
+  
+  # create WKT sting
+  out <- paste('POLYGON(('
+               ,lon - dx/2 ,' ' ,lat - dy/2 ,', '
+               ,lon + dx/2 ,' ' ,lat - dy/2 ,', '
+               ,lon + dx/2 ,' ' ,lat + dy/2 ,', '
+               ,lon - dx/2 ,' ' ,lat + dy/2 ,', '
+               ,lon - dx/2 ,' ' ,lat - dy/2 ,'))'
+               ,sep='')
+  
+  return(out)
+}
+
+# set the parameters
+dx <- 0.18 # width of the largest rectangle
+dy <- 0.16 # height of the largest rectangle
+n <- 2000     # number of simulated datapoints
+
+# simulate some vms data
+vms <- data_frame(lon = rnorm(n, -7.5, 0.15),
+                  lat = rnorm(n, 51.25, 0.1),
+                  effort_h = 2,
+                  speed_kmph = rnorm(n, 6.5, 0.5),
+                  trawl_width_km = 0.1,
+                  swept_area_km2 = effort_h * speed_kmph * trawl_width_km)
+
+# generate all possible nested rectangles
+# A1 represents the largest rectangles
+# two A2 rectangles fit inside each A1 rectangle
+# two A3 rectangles fit inside each A2 rectangle etc.
+A1 <- poly_fun(vms$lon, vms$lat, dx, dy)
+A2 <- poly_fun(vms$lon, vms$lat, dx, dy/2)
+A3 <- poly_fun(vms$lon, vms$lat, dx/2, dy/2)
+A4 <- poly_fun(vms$lon, vms$lat, dx/2, dy/4)
+A5 <- poly_fun(vms$lon, vms$lat, dx/4, dy/4)
+A6 <- poly_fun(vms$lon, vms$lat, dx/4, dy/8)
+A7 <- poly_fun(vms$lon, vms$lat, dx/8, dy/8)
+A8 <- poly_fun(vms$lon, vms$lat, dx/8, dy/16)
+A9 <- poly_fun(vms$lon, vms$lat, dx/16, dy/16)
+
+# count how many points are inside each rectangle
+ag1 <- aggregate(list(count = A1), list(poly = A1), length)
+ag2 <- aggregate(list(count = A2), list(poly = A2), length)
+ag3 <- aggregate(list(count = A3), list(poly = A3), length)
+ag4 <- aggregate(list(count = A4), list(poly = A4), length)
+ag5 <- aggregate(list(count = A5), list(poly = A5), length)
+ag6 <- aggregate(list(count = A6), list(poly = A6), length)
+ag7 <- aggregate(list(count = A7), list(poly = A7), length)
+ag8 <- aggregate(list(count = A8), list(poly = A8), length)
+ag9 <- aggregate(list(count = A9), list(poly = A9), length)
+
+# match the total count for each rectangle to each vms data point
+N1 <- ag1$count[match(A1,ag1$poly)]
+N2 <- ag2$count[match(A2,ag2$poly)]
+N3 <- ag3$count[match(A3,ag3$poly)]
+N4 <- ag4$count[match(A4,ag4$poly)]
+N5 <- ag5$count[match(A5,ag5$poly)]
+N6 <- ag6$count[match(A6,ag6$poly)]
+N7 <- ag7$count[match(A7,ag7$poly)]
+N8 <- ag8$count[match(A8,ag8$poly)]
+N9 <- ag9$count[match(A9,ag9$poly)]
+
+# if an A1 rectangle has at least 20 datapoints, take A2
+# if an A2 rectangle has at least 20 datapoints, take A3 etc
+vms$poly <- ifelse(N1 >= 20, A2, A1)
+vms$poly <- ifelse(N2 >= 20, A3, vms$poly)
+vms$poly <- ifelse(N3 >= 20, A4, vms$poly)
+vms$poly <- ifelse(N4 >= 20, A5, vms$poly)
+vms$poly <- ifelse(N5 >= 20, A6, vms$poly)
+vms$poly <- ifelse(N6 >= 20, A7, vms$poly)
+vms$poly <- ifelse(N7 >= 20, A8, vms$poly)
+vms$poly <- ifelse(N8 >= 20, A9, vms$poly)
+
+# calculate the total swept area in each rectangle
+vms1 <- aggregate(list(swept_area_km2 = vms$swept_area_km2)
+                  ,list(poly = vms$poly), sum) 
+
+
+
+# read Well-Known Text and return SpatialPolygons
+FUN <- function(x) {
+  readWKT(x, p4s='+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')
+}
+Srl <- lapply(vms1$poly,FUN)
+
+# project the data to obtain the area of each polygon
+FUN <- function(x) spTransform(x
+                               ,CRS("+proj=utm +zone=29 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+)@polygons[[1]]@Polygons[[1]]@area * 10^-6
+
+vms1$polygon_area_kmsq <- unlist(lapply(Srl,FUN))
+
+# calculate swept_area_ratio
+vms1$swept_area_ratio <- vms1$swept_area / vms1$polygon_area
+
+# colours for the polygons
+breaks <- seq(0, max(vms1$swept_area_ratio), len=10)
+i <- findInterval(vms1$swept_area_ratio, breaks, all.inside=T)
+vms1$greys <- grey(seq(1, 0, length=length(breaks) ) )[i]
+
+# set up blank plot
+plot(NA, xlim = c(-8, -7), ylim = c(51,  51.5), xlab = 'Longitude'
+     ,ylab = 'Latitude', asp=1.6)
+rect(par('usr')[1],par('usr')[3],par('usr')[2],par('usr')[4]
+     ,density=10,col='grey')
+
+# draw polygons
+for(i in 1:length(Srl)) plot(Srl[[i]], col=vms1$greys[i], add=T)
+
+# add the datapoints & box
+points(vms$lon, vms$lat, cex=0.1, col=4)
+box()
+
+
+# calculate the area that is impacted exactly k times
+# equation (4) from the main manuscript:
+# (equivalent to dpois)
+pm <- function(k, lamda) lamda ^k * exp(-lamda) / factorial(k)
+
+k <- 1
+sum(vms1$polygon_area * pm(k, vms1$swept_area_ratio) )
+k <- 2
+sum(vms1$polygon_area * pm(k, vms1$swept_area_ratio) )
+k <- 5
+sum(vms1$polygon_area * pm(k, vms1$swept_area_ratio) )
+
+# calculate the area that is impacted AT LEAST k times
+# (we empirically established this follows the gamma distribution)
+k <- 1
+sum(vms1$polygon_area * pgamma(vms1$swept_area_ratio, k, 1) )
+k <- 2
+sum(vms1$polygon_area * pgamma(vms1$swept_area_ratio, k, 1) )
+k <- 5
+sum(vms1$polygon_area * pgamma(vms1$swept_area_ratio, k, 1) )
+
+
 ```
-In the above we have simply "rounded" each record of lon's and the lat's to the defined tile resolution encoded in the character variable `sq`, where the midpoint x- and the y-values are separated by a `:`. To e.g. count the number of records in each tile and return the numerical midpoint values for each tile we simply do:
-```{r}
-df <- 
-  df %>% 
-  group_by(sq) %>% 
-  summarise(n = n()) %>% 
-  ungroup() %>% 
-  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE, remove = FALSE)
-df
-```
-The `remove = FALSE` is here simply used for illustrative purpose.
-
-Now to visualize the tile statistics we use the `geom_raster` function:
-```{r}
-df %>% 
-  ggplot(aes(lon, lat)) +
-  theme_bw() +
-  geom_raster(aes(fill = n)) +
-  geom_point(data = df.raw, aes(lon, lat), colour = "red", size = 0.25) +
-  geom_text(aes(label = n), colour = "yellow", angle = 45) +
-  coord_quickmap()
-```
-
-
-An attempt to provide generic approach is wrapped in the `gisland::tile_encode` function:
-
-```{r, message = FALSE}
-attach("/home/einarhj/prj/2016_trawlfootprint/data/2013_logbooks_and_vms.rda")
-base <- stofn
-tows <-
-  base %>% 
-  select(t1, t2, vid, gid, visir) %>% 
-  filter(!is.na(t2),
-         gid %in% 6)
-vms2 <- 
-  vms %>% 
-  mutate(visir = lookup_interval_ids(posdate, vid, tows, cn = c("t1", "t2", "vid", "visir"))) %>% 
-  filter(!is.na(visir)) %>% 
-  mutate(sq = tile_encode(lon, lat, dx = 0.010, dy = 0.005)) %>% 
-  group_by(sq) %>% 
-  summarise(n = n()) %>% 
-  ungroup() %>% 
-  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE)
-
-vms2 %>% 
-  filter(between(lon, -25, -24),
-         between(lat,  66.5,  67),
-         n > 5) %>% 
-  ggplot() +
-  theme_bw() +
-  geom_raster(aes(lon, lat, fill = n)) +
-  coord_quickmap() +
-  scale_fill_viridis(option = "B", trans = "reverse") +
-  labs(x = NULL, y = NULL) +
-  theme(legend.position = c(0.8, 0.2))
-
-# zoom out a bit
-vms2 %>% 
-  filter(between(lon, -27, -23),
-         between(lat,  65.75,  67.3),
-         n > 5) %>% 
-  ggplot() +
-  theme_bw() +
-  geom_polygon(data = iceland, aes(long, lat, group = group), fill = "grey") +
-  geom_raster(aes(lon, lat, fill = n)) +
-  coord_quickmap(xlim = c(-27, -23), ylim = c(65.75,  67.3)) +
-  scale_fill_viridis(option = "B", trans = "reverse") +
-  labs(x = NULL, y = NULL) +
-  theme(legend.position = c(0.1, 0.8))
-
-# and then some
-vms2 %>% 
-  filter(between(lon, -27, -9),
-         between(lat,  62.8,  67.75)) %>% 
-  mutate(n = ifelse(n > 50, 50, n)) %>% 
-  ggplot() +
-  theme_bw() +
-  geom_polygon(data = iceland, aes(long, lat, group = group), fill = "grey") +
-  geom_raster(aes(lon, lat, fill = n), interpolate = TRUE) +
-  coord_quickmap() +
-  scale_fill_viridis(option = "B", trans = "reverse") +
-  labs(x = NULL, y = NULL) +
-  theme(legend.position = c(0.5, 0.4))
-```
-
-
-## ICES rectangles
-
-A historical case, that has been with us in fishiers statistics (far to long) is to map catches from a particular fishing operation on statistical squares. Be they ices statistical rectangles (with a resolution 1° longitude and 0.5° latitude) or any other native tile format. Just as a case in point that this has been with us for a long time, here are some some data of the English fleet catch by ICES rectangle from the 19xx:
-
-```{r}
-
-
-```
-
-In the above case, as in any other rectangle/tile code system one needs to decode a one dimentional vector (normally a character) into some (dis-)continous values that are suitable for plotting. In the above case this is done with the `decode_tile`-function.
-
-## c-square
-
-Another example is the format that ICES report to OSPAR.
-
-... something more on c-square ...
-
-
-```{r}
-
-
-```
-
-... the problem is the same, to decode one dimentional character vector into x- and y-dimensions so it can be plotted. In the above case, we use the same `decode_tile`-function but specify instead of using the default (system = "ICES") we use (system = "csquare").
-
-
-
-
-```{r}
-data(tacsat, package = "vmstools")
-tacsat %>% 
-  gisland::tidy_tacsat() %>% 
-  select(SI_LONG, SI_LATI) %>% 
-  mutate(sq = tile_encode(SI_LONG, SI_LATI, dx = 0.50, dy = 0.25)) %>% 
-  group_by(sq) %>% 
-  slice(1)
-```
-
-The function returns the midpoints of a tile, whose resolution is specifed by _dx_ and _dy_ as a character vector where the midpoints are parsed, separated by _:_. Based on this one can start to create various summary statistics on each tile, e.g.
-
-```{r}
-vms <- 
-  tacsat %>% 
-  tidy_tacsat() %>% 
-  select(year, SI_LATI, SI_LONG, SI_SP, SI_HE) %>% 
-  mutate(sq = tile_encode(SI_LONG, SI_LATI, dx = 0.50, dy = 0.25)) %>% 
-  group_by(year, sq) %>% 
-  summarise(n = n(),
-            # not necessarily sensible statistics
-            maxSP = max(SI_SP, na.rm = TRUE),
-            minSP = min(SI_SP, na.rm = TRUE),
-            meanSP = mean(SI_SP, na.rm = TRUE),
-            medianHE = median(SI_HE, na.rm = TRUE))
-glimpse(vms)
-```
-
-To get back the numerical value of the tile midpoints one can use the `tidyr::separate` function.
-```{r}
-vms <- 
-  vms %>% 
-  separate(sq, c("lon", "lat"), sep = ":", convert = TRUE)
-glimpse(vms)
-```
-
-A visual map can then be obtained via the `ggplot2::geom_tile` function:
-
-```{r}
-library(mmap)
-m <- ecoregion[ecoregion$Ecoregion %in% "Greater North Sea",]
-vms %>% 
-  filter(between(lon, -4, 10),
-         between(lat, 25, 58)) %>% 
-  ggplot() +
-  geom_polygon(data = m, aes(long, lat, group = group), fill = "white") +
-  geom_tile(aes(lon, lat, fill = n)) +
-  scale_fill_viridis(option = "B", trans = "reverse") +
-  facet_wrap(~ year) +
-  coord_quickmap()
-rm(vms)
-```
-
